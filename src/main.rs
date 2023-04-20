@@ -1,11 +1,11 @@
 use clap::Parser;
 
+mod config;
+mod cli;
+mod modifiers;
+mod error;
 
-#[derive(Parser)]
-#[clap(version, author, about, long_about = None)]
-struct CliArgs {
-    
-}
+use cli::CliArgs;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
