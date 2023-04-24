@@ -11,7 +11,7 @@
 //!
 //! Will result in the following tree:
 //!
-//! combine: 
+//! combine:
 //! |-- uppercase:
 //! ---| file:
 //! |  |---- "firstname.txt"
@@ -35,15 +35,24 @@
 
 use std::str::FromStr;
 
+use nom::branch;
+use nom::bytes::complete as bytes;
+use nom::character::complete as character;
+use nom::combinator;
+use nom::error;
+use nom::multi;
+use nom::sequence;
+use nom::sequence::preceded;
 use thiserror::Error;
 
-pub type ParserResult = Result<(Token, usize), ParserError>;
+pub type IResult<'e, I, T> = nom::IResult<I, T, error::VerboseError<&'e str>>;
+pub type ParserResult<'e> = Result<Token, nom::Err<error::VerboseError<&'e str>>>;
 
 /// Individual entities that can be encountered when parsing config files
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token {
     Modifier(Modifier, Vec<Token>),
-    String(String)
+    String(String),
 }
 
 // A list of modifiers that can be encountered.
@@ -52,7 +61,7 @@ enum Modifier {
     Combine,
     Uppercase,
     Lowercase,
-    File
+    File,
 }
 
 #[derive(Debug, Error)]
@@ -66,100 +75,73 @@ pub enum ParserError {
     #[error("unmatches parenthesis")]
     UnmatchesParenthesis,
     #[error("illegal character {0} at {1}")]
-    IllegalCharacter(char, usize)
+    IllegalCharacter(char, usize),
 }
 
 #[derive(Debug)]
-pub struct Parser {
+pub struct Parser {}
 
+pub fn parse(input: &str) -> IResult<&str, Token> {
+    branch::alt((
+        error::context("parse-alt:parse_string", parse_string),
+        error::context("parse-alt:parse_modifier", parse_modifier),
+    ))(input)
 }
 
-impl Parser {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    /// Parse the provided string into a token tree or return the error that occured.
-    pub fn parse(&self, raw: &str) -> ParserResult {
-        return match raw.char_indices().next() {
-            None => Err(ParserError::EmptyValue),
-            Some((_, '\'' | '"')) => self.parse_string(&raw[1..], 1),
-            Some(_) => self.parse_modifier(raw, 0)
-        }
-    }
-
-
-    /// Parse a modifier. This function is called when we encountered a opening parenthesis after
-    /// parsing an unquoted literal string. The first character of the `str` is immediately 
-    /// after the opening parenthesis of the modifier.
-    /// Returns the parsed modifier, or error, and the total amount of processed characters. 
-    fn parse_modifier(&self, str: &str, start_offset: usize) -> ParserResult {
-        let mut modifier_name = String::new();
-        let mut index = 0;
-        let mut parsed_chars = 0;
-        for (i, ch) in str.char_indices() {
-            index = i;
-            parsed_chars = i;
-            // parsed name fully, can parse sub-tokens or modifiers
-            if ch == '(' {
-                break;
-            } else if !ch.is_ascii_alphabetic() {
-                return Err(ParserError::IllegalCharacter(ch, start_offset + parsed_chars));
-            } else {
-                modifier_name.push(ch);
-            }
-        }
-
-        let modifier = Modifier::from_str(modifier_name.as_str())?;
-
-        // parse string or nested modifier
-        let arguments: Vec<Token> = {
-            
-        };
-        
-
-        Err(ParserError::EmptyValue)
-    }
-
-    /// Parse a raw string. Called immediately after a quote is encountered. Returns a String token 
-    /// containing all characters except the last non-escaped quote.
-    fn parse_string(&self, str: &str, start_offset: usize) -> ParserResult {
-        let mut string = String::new();
-        let mut escape_next = false;
-        let mut i = 0;
-        for (i, ch) in str.char_indices() {
-            if ch == '\\' && !escape_next {
-                escape_next = true;
-                continue;
-            } else if ch == '"' {
-                if escape_next {
-                    string.push(ch);
-                } else {
-                    return Ok((Token::String(string), start_offset + i));
-                }
-            } else {
-                string.push(ch);
-            }
-
-            escape_next = false;
-        }
-    
-        Err(ParserError::UnclosedString(start_offset + i))
-    }
+fn parse_string(input: &str) -> IResult<&str, Token> {
+    sequence::delimited(
+        character::char('"'),
+        bytes::escaped_transform(
+            character::alphanumeric1,
+            '\\',
+            combinator::value("\"", bytes::tag("\"")),
+        ),
+        character::char('"'),
+    )(input)
+    .map(|s| (s.0, Token::String(s.1)))
 }
 
-impl FromStr for Modifier {
-    type Err = ParserError;
+fn parse_modifier(input: &str) -> IResult<&str, Token> {
+    let (remaining, modifier_name) = error::context("parse_modifier", parse_modifier_name)(input)?;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "lowercase" => Ok(Modifier::Lowercase),
-            "uppercase" => Ok(Modifier::Uppercase),
-            "file" => Ok(Modifier::File),
-            "combine" => Ok(Modifier::Combine),
-            _ => Err(ParserError::UnknownModifier(s.to_owned()))
-        }
-    }
+    let (_, modifier) = error::context(
+        "parse_modifier_select_modifier_type",
+        branch::alt((
+            combinator::value(Modifier::Combine, bytes::tag("combine")),
+            combinator::value(Modifier::File, bytes::tag("file")),
+            combinator::value(Modifier::Uppercase, bytes::tag("uppercase")),
+            combinator::value(Modifier::Lowercase, bytes::tag("lowercase")),
+        )),
+    )(modifier_name)?;
+
+    let (remaining, args) = parse_modifier_arguments(remaining)?;
+
+    Ok((remaining, Token::Modifier(modifier, args)))
+}
+
+fn parse_modifier_name(input: &str) -> IResult<&str, &str> {
+    error::context("parse_modifier_name", bytes::take_until1("("))(input)
+}
+
+fn parse_modifier_arguments(input: &str) -> IResult<&str, Vec<Token>> {
+    error::context(
+        "parse_modifier_arguments",
+        // the take(1) is necessary as otherwise we fail due to trying to parse the unconsumed
+        // opening parenthesis
+        preceded(
+            bytes::take(1usize),
+            combinator::cut(sequence::terminated(
+                multi::separated_list1(
+                    preceded(character::space0, character::char(',')),
+                    preceded(
+                        character::space0,
+                        branch::alt((preceded(character::char(','), parse), parse)),
+                    ),
+                ),
+                preceded(character::space0, character::char(')')),
+            )),
+        ),
+    )(input)
 }
 
 #[cfg(test)]
@@ -169,25 +151,75 @@ mod test {
     #[test]
     fn test_parser_parse_string_simple() {
         let unparsed = "\"string\"";
-        let mut parser = Parser::new();
 
-        let res = parser.parse(unparsed);
+        let res = parse(unparsed);
         assert!(res.is_ok());
-        let res = res.unwrap();
+        let res = res.unwrap().1;
 
-        assert_eq!(res.0, Token::String(String::from("string")));
+        assert_eq!(res, Token::String(String::from("string")));
     }
 
     #[test]
     fn test_parser_parse_string_escaped() {
         let unparsed = "\"\\\"pa55w0rd\"";
 
-        let mut parser = Parser::new();
-        let res = parser.parse(unparsed);
-
+        let res = parse(unparsed);
         assert!(res.is_ok());
-        let res = res.unwrap();
+        let res = res.unwrap().1;
 
-        assert_eq!(res.0, Token::String(String::from("\"pa55w0rd")));
+        assert_eq!(res, Token::String(String::from("\"pa55w0rd")));
+    }
+
+    #[test]
+    fn test_uppercase_modifier_string_arg() {
+        let unparsed = "uppercase(\"hello\")";
+        let res = parse(unparsed);
+
+        let res = res.unwrap().1;
+        assert_eq!(
+            res,
+            Token::Modifier(
+                Modifier::Uppercase,
+                vec![Token::String(From::from("hello"))]
+            )
+        );
+    }
+
+    #[test]
+    fn test_lowercase_modifier_string_arg() {
+        let unparsed = "lowercase(\"hello\")";
+        let res = parse(unparsed);
+
+        let res = res.unwrap().1;
+        assert_eq!(
+            res,
+            Token::Modifier(
+                Modifier::Lowercase,
+                vec![Token::String(From::from("hello"))]
+            )
+        );
+    }
+
+    #[test]
+    fn test_combine_modifier_three_args() {
+        let unparsed = "combine(\"hello\", \",\", \" world\")";
+        let res = parse(unparsed);
+
+        if let Err(nom::Err::Failure(e) | nom::Err::Error(e)) = res {
+            let error = error::convert_error(unparsed, e);
+            panic!("Failed to parse combine modifier: {error}");
+        }
+        let res = res.unwrap().1;
+        assert_eq!(
+            res,
+            Token::Modifier(
+                Modifier::Combine,
+                vec![
+                    Token::String(From::from("hello")),
+                    Token::String(From::from(",")),
+                    Token::String(From::from(" world"))
+                ]
+            )
+        );
     }
 }

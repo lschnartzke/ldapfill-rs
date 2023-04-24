@@ -393,6 +393,7 @@ dependencies = [
  "clap",
  "indicatif",
  "ldap3",
+ "nom",
  "serde",
  "thiserror",
  "tokio",
