@@ -37,6 +37,8 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
+mod processor;
+
 pub type ParserResult = Result<(Token, usize), ParserError>;
 
 /// Individual entities that can be encountered when parsing config files
@@ -48,7 +50,7 @@ pub enum Token {
 
 // A list of modifiers that can be encountered.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Modifier {
+pub enum Modifier {
     Combine,
     Uppercase,
     Lowercase,
@@ -80,14 +82,42 @@ impl Parser {
     }
 
     /// Parse the provided string into a token tree or return the error that occured.
-    pub fn parse(&self, raw: &str) -> ParserResult {
+    pub fn parse(&self, raw: &str, offset: usize) -> ParserResult {
         return match raw.char_indices().next() {
             None => Err(ParserError::EmptyValue),
-            Some((_, '\'' | '"')) => self.parse_string(&raw[1..], 1),
-            Some(_) => self.parse_modifier(raw, 0)
+            Some((_, c @ ('\'' | '"'))) => self.parse_string(&raw[1..], c,  offset + 1),
+            Some(_) => self.parse_modifier(raw, offset)
         }
     }
 
+    /// Parse the arguments to an modifier. This function does not check the correct count of
+    /// modifiers, it only parses the found values into tokens.
+    fn parse_modifier_arguments(&self, string: &str, mut offset: usize) -> Result<(Vec<Token>, usize), ParserError> {
+        // determine if string or modifier
+        let mut index = 0;
+        let mut arguments: Vec<Token> = vec![];
+        let mut processed = 0;
+        for (i, ch) in string.char_indices() {
+            offset += 1;
+            println!("parse_modifier_arguments: {}", ch);
+            let arg = match ch {
+                // skip whitespace
+                c if c.is_ascii_whitespace() => continue,
+                '\'' | '"' => self.parse_string(&string[i + 1..], ch, offset + 1).map(|ok| {
+                    offset += ok.1;
+                    ok.0
+                })?,
+                _ => self.parse_modifier(&string[i..], offset).map(|ok| {
+                    offset += ok.1;
+                    ok.0
+                })?
+            };
+                
+            arguments.push(arg);
+        }
+        
+        Ok((arguments, offset))
+    }
 
     /// Parse a modifier. This function is called when we encountered a opening parenthesis after
     /// parsing an unquoted literal string. The first character of the `str` is immediately 
@@ -97,7 +127,9 @@ impl Parser {
         let mut modifier_name = String::new();
         let mut index = 0;
         let mut parsed_chars = 0;
+        let mut processed = 0;
         for (i, ch) in str.char_indices() {
+            processed += 1;
             index = i;
             parsed_chars = i;
             // parsed name fully, can parse sub-tokens or modifiers
@@ -113,29 +145,32 @@ impl Parser {
         let modifier = Modifier::from_str(modifier_name.as_str())?;
 
         // parse string or nested modifier
-        let arguments: Vec<Token> = {
-            
-        };
-        
+        let (arguments, parsed) = self.parse_modifier_arguments(&str[start_offset + parsed_chars + 1..], start_offset + parsed_chars + 1)?;
+        processed += parsed;
 
-        Err(ParserError::EmptyValue)
+        Ok((Token::Modifier(modifier, arguments), processed))
     }
 
     /// Parse a raw string. Called immediately after a quote is encountered. Returns a String token 
     /// containing all characters except the last non-escaped quote.
-    fn parse_string(&self, str: &str, start_offset: usize) -> ParserResult {
+    /// Returns the parsed string and the amount of strings that have been processed, including the
+    /// final string delimiter.
+    fn parse_string(&self, str: &str, delim: char, start_offset: usize) -> ParserResult {
+        println!("parse_string(): str: {str}");
         let mut string = String::new();
         let mut escape_next = false;
         let mut i = 0;
+        let mut processed = 0;
         for (i, ch) in str.char_indices() {
+            processed += 1;
             if ch == '\\' && !escape_next {
                 escape_next = true;
                 continue;
-            } else if ch == '"' {
+            } else if ch == delim {
                 if escape_next {
                     string.push(ch);
                 } else {
-                    return Ok((Token::String(string), start_offset + i));
+                    return Ok((Token::String(string), processed));
                 }
             } else {
                 string.push(ch);
@@ -144,7 +179,18 @@ impl Parser {
             escape_next = false;
         }
     
-        Err(ParserError::UnclosedString(start_offset + i))
+        Err(ParserError::UnclosedString(start_offset + processed))
+    }
+}
+
+impl Modifier {
+    pub fn max_arg_count(&self) -> Option<usize> {
+        match *self {
+            Modifier::Lowercase => None,
+            Modifier::Uppercase => None,
+            Modifier::Combine => None,
+            Modifier::File => Some(1)
+        }
     }
 }
 
@@ -171,7 +217,7 @@ mod test {
         let unparsed = "\"string\"";
         let mut parser = Parser::new();
 
-        let res = parser.parse(unparsed);
+        let res = parser.parse(unparsed, 0);
         assert!(res.is_ok());
         let res = res.unwrap();
 
@@ -183,11 +229,24 @@ mod test {
         let unparsed = "\"\\\"pa55w0rd\"";
 
         let mut parser = Parser::new();
-        let res = parser.parse(unparsed);
+        let res = parser.parse(unparsed, 0);
 
         assert!(res.is_ok());
         let res = res.unwrap();
 
         assert_eq!(res.0, Token::String(String::from("\"pa55w0rd")));
+    }
+
+    #[test]
+    fn test_parse_uppercase_modifier_with_string_arument() {
+        let raw = "uppercase(\"test\")";
+        let mut parser = Parser::new();
+
+        let res = parser.parse(raw, 0);
+        println!("{:?}", res);
+        assert!(res.is_ok());
+        let res = res.unwrap().0;
+
+        assert_eq!(res, Token::Modifier(Modifier::Uppercase, vec![Token::String(String::from("test"))]))
     }
 }

@@ -18,11 +18,11 @@ For example, to generate inetOrgPerson entries, the config would look like this:
 
 ```
 [inetOrgPerson]
-cn=combine(firstname.txt lastname.txt)
-givenName=firstname.txt
-sn=lastname.txt 
-uid=lowercase(combine(firstname.txt lastname.txt))
-mail=lowercase(combine(firstname.txt . lastname.txt @ domains.txt))
+cn=combine(file(firstname.txt) " " file(lastname.txt))
+givenName=file(firstname.txt)
+sn=file(lastname.txt)
+uid=lowercase(combine(file(firstname.txt) " " file(lastname.txt))
+mail=lowercase(combine(file(firstname.txt) "." file(lastname.txt) "@" file(domains.txt))
 ```
 
 To explain:
@@ -35,6 +35,8 @@ values should be pulled.
 ## Modifiers
 To allow reusing text files, some modifiers can be applied to the configuration values. At the 
 time of writing, there are the following modifiers:
+
+* file(arg) - Use a random line of this file as a value, whenever the modifier is used
 
 * combine(args...) - Combines multiple values. If a provided argument is a file, a random value 
 from the file will be used. If it cannot be resolved to a file, the value will be used as-is.
