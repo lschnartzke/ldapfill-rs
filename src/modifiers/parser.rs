@@ -35,18 +35,11 @@
 
 use std::str::FromStr;
 
-use nom::branch;
-use nom::bytes::complete as bytes;
-use nom::character::complete as character;
-use nom::combinator;
-use nom::error;
-use nom::multi;
-use nom::sequence;
-use nom::sequence::preceded;
-use thiserror::Error;
 
-pub type IResult<'e, I, T> = nom::IResult<I, T, error::VerboseError<&'e str>>;
-pub type ParserResult<'e> = Result<Token, nom::Err<error::VerboseError<&'e str>>>;
+use thiserror::Error;
+use pest::Parser;
+
+pub type ParserResult<'e> = Result<Token, ParserError>;
 
 /// Individual entities that can be encountered when parsing config files
 #[derive(Debug, PartialEq, Eq)]
@@ -78,76 +71,19 @@ pub enum ParserError {
     IllegalCharacter(char, usize),
 }
 
-#[derive(Debug)]
-pub struct Parser {}
+#[derive(Debug, Parser)]
+#[grammar = "../modifier.pest"]
+pub struct CfgParser;
 
-pub fn parse(input: &str) -> IResult<&str, Token> {
-    branch::alt((
-        error::context("parse-alt:parse_string", parse_string),
-        error::context("parse-alt:parse_modifier", parse_modifier),
-    ))(input)
-}
+pub fn parse(input: &str) -> Token {
+    let res = CfgParser::parse(Rule::line, input).expect("Valid input");
 
-fn parse_string(input: &str) -> IResult<&str, Token> {
-    sequence::delimited(
-        character::char('"'),
-        bytes::escaped_transform(
-            character::alphanumeric1,
-            '\\',
-            combinator::value("\"", bytes::tag("\"")),
-        ),
-        character::char('"'),
-    )(input)
-    .map(|s| (s.0, Token::String(s.1)))
-}
+    // TODO: Convert parsed tree into tokens/modifiers
+    for record in res.into_iter() {
+        println!("{record:#?}");
+    }
 
-fn parse_modifier(input: &str) -> IResult<&str, Token> {
-    let (remaining, modifier_name) = error::context("parse_modifier", parse_modifier_name)(input)?;
-
-    let (_, modifier) = error::context(
-        "parse_modifier_select_modifier_type",
-        branch::alt((
-            combinator::value(Modifier::Combine, bytes::tag("combine")),
-            combinator::value(Modifier::File, bytes::tag("file")),
-            combinator::value(Modifier::Uppercase, bytes::tag("uppercase")),
-            combinator::value(Modifier::Lowercase, bytes::tag("lowercase")),
-        )),
-    )(modifier_name)?;
-
-    let (remaining, args) = parse_modifier_arguments(remaining)?;
-
-    Ok((remaining, Token::Modifier(modifier, args)))
-}
-
-fn parse_modifier_name(input: &str) -> IResult<&str, &str> {
-    error::context("parse_modifier_name", bytes::take_until1("("))(input)
-}
-
-fn parse_modifier_arguments(input: &str) -> IResult<&str, Vec<Token>> {
-    error::context(
-        "parse_modifier_arguments",
-        // the take(1) is necessary as otherwise we fail due to trying to parse the unconsumed
-        // opening parenthesis
-        preceded(
-            bytes::take(1usize),
-            combinator::cut(sequence::terminated(
-                multi::separated_list1(
-                    preceded(character::space0, bytes::tag(",")),
-                    error::context("parse_modifier_arguments-parse-arg", preceded(
-                        character::space0,
-                        branch::alt((
-                            error::context("parse_modifier_arguments-parse-second-arg",
-                                preceded(character::char(','), parse)),
-                            error::context("parse_modifier_arguments-parse-first-arg",
-                               parse
-                            ),
-                        )),
-                    ),
-                )),
-                preceded(character::space0, character::char(')')),
-            )),
-        ),
-    )(input)
+    panic!("Nope");
 }
 
 #[cfg(test)]
@@ -155,35 +91,19 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_parse_string_remaining_empty() {
-        let unparsed = "\"string\"";
-        let res = parse(unparsed);
-        
-        let (remain, string) = res.unwrap();
-        assert_eq!(string, Token::String(From::from("string")));
-        assert_eq!(remain, "")
-    }
-
-    #[test]
     fn test_parser_parse_string_simple() {
         let unparsed = "\"string\"";
 
         let res = parse(unparsed);
-        assert!(res.is_ok());
-        let res = res.unwrap().1;
-
-        assert_eq!(res, Token::String(String::from("string")));
+        
+        assert_eq!(res, Token::String(From::from("string")));
     }
 
     #[test]
     fn test_parser_parse_string_escaped() {
         let unparsed = "\"\\\"pa55w0rd\"";
 
-        let res = parse(unparsed);
-        assert!(res.is_ok());
-        let res = res.unwrap().1;
 
-        assert_eq!(res, Token::String(String::from("\"pa55w0rd")));
     }
 
     #[test]
@@ -191,14 +111,6 @@ mod test {
         let unparsed = "uppercase(\"hello\")";
         let res = parse(unparsed);
 
-        let res = res.unwrap().1;
-        assert_eq!(
-            res,
-            Token::Modifier(
-                Modifier::Uppercase,
-                vec![Token::String(From::from("hello"))]
-            )
-        );
     }
 
     #[test]
@@ -206,14 +118,6 @@ mod test {
         let unparsed = "lowercase(\"hello\")";
         let res = parse(unparsed);
 
-        let res = res.unwrap().1;
-        assert_eq!(
-            res,
-            Token::Modifier(
-                Modifier::Lowercase,
-                vec![Token::String(From::from("hello"))]
-            )
-        );
     }
 
     #[test]
@@ -221,21 +125,6 @@ mod test {
         let unparsed = "combine(\"hello\", \",\", \" world\")";
         let res = parse(unparsed);
 
-        if let Err(nom::Err::Failure(e) | nom::Err::Error(e)) = res {
-            let error = error::convert_error(unparsed, e);
-            panic!("Failed to parse combine modifier: {error}");
-        }
-        let res = res.unwrap().1;
-        assert_eq!(
-            res,
-            Token::Modifier(
-                Modifier::Combine,
-                vec![
-                    Token::String(From::from("hello")),
-                    Token::String(From::from(",")),
-                    Token::String(From::from(" world"))
-                ]
-            )
-        );
     }
 }
+

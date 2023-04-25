@@ -1,0 +1,5 @@
+string        = { "\"" ~ ('a'..'z' | 'A'..'Z' | '0'..'9' | "@" | "." | ",")* ~ "\"" }
+modifier_name = { "uppercase" | "lowercase" | "file" | "combine" }
+modifier_args = { "(" ~ ((string | modifier) ~ ", "?)+ ~ ")" }
+modifier      = { modifier_name ~ modifier_args }
+line          = { string | modifier }
