@@ -132,12 +132,18 @@ fn parse_modifier_arguments(input: &str) -> IResult<&str, Vec<Token>> {
             bytes::take(1usize),
             combinator::cut(sequence::terminated(
                 multi::separated_list1(
-                    preceded(character::space0, character::char(',')),
-                    preceded(
+                    preceded(character::space0, bytes::tag(",")),
+                    error::context("parse_modifier_arguments-parse-arg", preceded(
                         character::space0,
-                        branch::alt((preceded(character::char(','), parse), parse)),
+                        branch::alt((
+                            error::context("parse_modifier_arguments-parse-second-arg",
+                                preceded(character::char(','), parse)),
+                            error::context("parse_modifier_arguments-parse-first-arg",
+                               parse
+                            ),
+                        )),
                     ),
-                ),
+                )),
                 preceded(character::space0, character::char(')')),
             )),
         ),
@@ -147,6 +153,16 @@ fn parse_modifier_arguments(input: &str) -> IResult<&str, Vec<Token>> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_parse_string_remaining_empty() {
+        let unparsed = "\"string\"";
+        let res = parse(unparsed);
+        
+        let (remain, string) = res.unwrap();
+        assert_eq!(string, Token::String(From::from("string")));
+        assert_eq!(remain, "")
+    }
 
     #[test]
     fn test_parser_parse_string_simple() {
