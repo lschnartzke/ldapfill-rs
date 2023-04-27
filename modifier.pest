@@ -1,0 +1,11 @@
+char = {
+    !("\"" | "\\") ~ ANY
+    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+string_content = { char* }
+string        = { "\"" ~ string_content ~ "\"" }
+modifier_name = { "uppercase" | "lowercase" | "file" | "combine" }
+modifier_args = { "(" ~ ((string | modifier) ~ ", "?)+ ~ ")" }
+modifier      = { modifier_name ~ modifier_args }
+line          = { string | modifier }

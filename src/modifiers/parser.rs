@@ -11,7 +11,7 @@
 //!
 //! Will result in the following tree:
 //!
-//! combine: 
+//! combine:
 //! |-- uppercase:
 //! ---| file:
 //! |  |---- "firstname.txt"
@@ -35,17 +35,19 @@
 
 use std::str::FromStr;
 
+use pest::{error::Error, iterators::Pair, iterators::Pairs, Parser};
 use thiserror::Error;
 
 mod processor;
 
-pub type ParserResult = Result<(Token, usize), ParserError>;
+pub type ParserResult<'e> = Result<Token, ParserError>;
+pub type PestResult<'r> = Result<Pairs<'r, Rule>, Error<Rule>>;
 
 /// Individual entities that can be encountered when parsing config files
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token {
     Modifier(Modifier, Vec<Token>),
-    String(String)
+    String(String),
 }
 
 // A list of modifiers that can be encountered.
@@ -54,7 +56,7 @@ pub enum Modifier {
     Combine,
     Uppercase,
     Lowercase,
-    File
+    File,
 }
 
 #[derive(Debug, Error)]
@@ -68,142 +70,85 @@ pub enum ParserError {
     #[error("unmatches parenthesis")]
     UnmatchesParenthesis,
     #[error("illegal character {0} at {1}")]
-    IllegalCharacter(char, usize)
+    IllegalCharacter(char, usize),
 }
 
-#[derive(Debug)]
-pub struct Parser {
+#[derive(Debug, Parser)]
+#[grammar = "../modifier.pest"]
+pub struct CfgParser;
 
+pub fn parse(input: &str) -> ParserResult {
+    let mut res = CfgParser::parse(Rule::line, input).expect("Valid input");
+
+    let res = res.next().expect("at least one pair");
+    #[cfg(test)]
+    println!("{res:#?}");
+
+    let mut token = build_token_tree_from_pair(res);
+    assert!(token.len() == 1);
+
+    Ok(token.pop().expect("exactly one token"))
 }
 
-impl Parser {
-    pub fn new() -> Self {
-        Self {}
-    }
+fn build_token_tree_from_pair(pair: Pair<Rule>) -> Vec<Token> {
+    let mut res = vec![];
+    let rule = pair.as_rule();
+    println!("build_token_tree_from_pairs(): rule: {rule:?}, pair: {pair:#?}");
 
-    /// Parse the provided string into a token tree or return the error that occured.
-    pub fn parse(&self, raw: &str, offset: usize) -> ParserResult {
-        return match raw.char_indices().next() {
-            None => Err(ParserError::EmptyValue),
-            Some((_, c @ ('\'' | '"'))) => self.parse_string(&raw[1..], c,  offset + 1),
-            Some(_) => self.parse_modifier(raw, offset)
+    match rule {
+        Rule::line => {
+            let mut inner_pair = pair.into_inner();
+            res.extend(build_token_tree_from_pair(inner_pair.next().expect(
+                "line MUST always contain either string or modifier (check grammar)",
+            )));
         }
-    }
-
-    /// Parse the arguments to an modifier. This function does not check the correct count of
-    /// modifiers, it only parses the found values into tokens.
-    fn parse_modifier_arguments(&self, string: &str, mut offset: usize) -> Result<(Vec<Token>, usize), ParserError> {
-        // determine if string or modifier
-        let mut index = 0;
-        let mut arguments: Vec<Token> = vec![];
-        let mut processed = 0;
-        for (i, ch) in string.char_indices() {
-            offset += 1;
-            println!("parse_modifier_arguments: {}", ch);
-            let arg = match ch {
-                // skip whitespace
-                c if c.is_ascii_whitespace() => continue,
-                '\'' | '"' => self.parse_string(&string[i + 1..], ch, offset + 1).map(|ok| {
-                    offset += ok.1;
-                    ok.0
-                })?,
-                _ => self.parse_modifier(&string[i..], offset).map(|ok| {
-                    offset += ok.1;
-                    ok.0
-                })?
-            };
-                
-            arguments.push(arg);
+        Rule::modifier => {
+            let mut inner_pair = pair.into_inner();
+            let modifier_name_pair = inner_pair
+                .next()
+                .expect("modifier name MUST be present (check grammar)");
+            let modifier = Modifier::from_str(modifier_name_pair.as_span().as_str())
+                .expect("modifier should be checked by grammar (check grammar)");
+            let modifier_args_pair = inner_pair
+                .next()
+                .expect("modifier must contain MODIFIER_ARGS (check grammar)");
+            let args = build_token_tree_from_pair(modifier_args_pair);
+            res.push(Token::Modifier(modifier, args));
         }
-        
-        Ok((arguments, offset))
-    }
-
-    /// Parse a modifier. This function is called when we encountered a opening parenthesis after
-    /// parsing an unquoted literal string. The first character of the `str` is immediately 
-    /// after the opening parenthesis of the modifier.
-    /// Returns the parsed modifier, or error, and the total amount of processed characters. 
-    fn parse_modifier(&self, str: &str, start_offset: usize) -> ParserResult {
-        let mut modifier_name = String::new();
-        let mut index = 0;
-        let mut parsed_chars = 0;
-        let mut processed = 0;
-        for (i, ch) in str.char_indices() {
-            processed += 1;
-            index = i;
-            parsed_chars = i;
-            // parsed name fully, can parse sub-tokens or modifiers
-            if ch == '(' {
-                break;
-            } else if !ch.is_ascii_alphabetic() {
-                return Err(ParserError::IllegalCharacter(ch, start_offset + parsed_chars));
-            } else {
-                modifier_name.push(ch);
+        Rule::modifier_name => {
+            unreachable!("Rule::modifier_name should be handled by Rule::modifier branch")
+        }
+        Rule::modifier_args => {
+            // inner_pair contains a list of all arguments
+            let inner_pair = pair.into_inner();
+            
+            // loop over the pairs and collect the arguments 
+            for arg in inner_pair {
+                res.extend(build_token_tree_from_pair(arg));
             }
         }
-
-        let modifier = Modifier::from_str(modifier_name.as_str())?;
-
-        // parse string or nested modifier
-        let (arguments, parsed) = self.parse_modifier_arguments(&str[start_offset + parsed_chars + 1..], start_offset + parsed_chars + 1)?;
-        processed += parsed;
-
-        Ok((Token::Modifier(modifier, arguments), processed))
+        Rule::string => res.push(Token::String(
+            pair.into_inner()
+                .next()
+                .expect("string MUST always contain STRING_CONTENT")
+                .as_span()
+                .as_str()
+                .to_string(),
+        )),
+        Rule::char | Rule::string_content => unreachable!(),
     }
-
-    /// Parse a raw string. Called immediately after a quote is encountered. Returns a String token 
-    /// containing all characters except the last non-escaped quote.
-    /// Returns the parsed string and the amount of strings that have been processed, including the
-    /// final string delimiter.
-    fn parse_string(&self, str: &str, delim: char, start_offset: usize) -> ParserResult {
-        println!("parse_string(): str: {str}");
-        let mut string = String::new();
-        let mut escape_next = false;
-        let mut i = 0;
-        let mut processed = 0;
-        for (i, ch) in str.char_indices() {
-            processed += 1;
-            if ch == '\\' && !escape_next {
-                escape_next = true;
-                continue;
-            } else if ch == delim {
-                if escape_next {
-                    string.push(ch);
-                } else {
-                    return Ok((Token::String(string), processed));
-                }
-            } else {
-                string.push(ch);
-            }
-
-            escape_next = false;
-        }
-    
-        Err(ParserError::UnclosedString(start_offset + processed))
-    }
+    res
 }
-
-impl Modifier {
-    pub fn max_arg_count(&self) -> Option<usize> {
-        match *self {
-            Modifier::Lowercase => None,
-            Modifier::Uppercase => None,
-            Modifier::Combine => None,
-            Modifier::File => Some(1)
-        }
-    }
-}
-
 impl FromStr for Modifier {
     type Err = ParserError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "lowercase" => Ok(Modifier::Lowercase),
+        match s {
             "uppercase" => Ok(Modifier::Uppercase),
+            "lowercase" => Ok(Modifier::Lowercase),
             "file" => Ok(Modifier::File),
             "combine" => Ok(Modifier::Combine),
-            _ => Err(ParserError::UnknownModifier(s.to_owned()))
+            s => Err(ParserError::UnknownModifier(s.to_string())),
         }
     }
 }
@@ -215,37 +160,86 @@ mod test {
     #[test]
     fn test_parser_parse_string_simple() {
         let unparsed = "\"string\"";
-        let mut parser = Parser::new();
 
-        let res = parser.parse(unparsed, 0);
-        assert!(res.is_ok());
-        let res = res.unwrap();
+        let res = parse(unparsed).expect("valid token");
 
-        assert_eq!(res.0, Token::String(String::from("string")));
+        assert_eq!(res, Token::String(From::from("string")));
     }
 
     #[test]
     fn test_parser_parse_string_escaped() {
         let unparsed = "\"\\\"pa55w0rd\"";
+        let res = parse(unparsed).expect("valid token");
 
-        let mut parser = Parser::new();
-        let res = parser.parse(unparsed, 0);
+        assert_eq!(res, Token::String(From::from("\\\"pa55w0rd")));
+    }
 
-        assert!(res.is_ok());
-        let res = res.unwrap();
+    #[test]
+    fn test_uppercase_modifier_string_arg() {
+        let unparsed = "uppercase(\"hello\")";
+        let res = parse(unparsed).expect("valid token");
 
-        assert_eq!(res.0, Token::String(String::from("\"pa55w0rd")));
+        assert_eq!(
+            res,
+            Token::Modifier(
+                Modifier::Uppercase,
+                vec![Token::String(From::from("hello"))]
+            )
+        );
+    }
+
+    #[test]
+    fn test_lowercase_modifier_string_arg() {
+        let unparsed = "lowercase(\"hello\")";
+        let res = parse(unparsed).expect("valid token");
+
+        assert_eq!(
+            res,
+            Token::Modifier(
+                Modifier::Lowercase,
+                vec![Token::String(From::from("hello"))]
+            )
+        );
+    }
+
+    #[test]
+    fn test_nested_modifiers() {
+        let unparsed =
+            "combine(uppercase(file(\"firstname.txt\")), \".\", lowercase(file(\"lastname.txt\")))";
+        let res = parse(unparsed).expect("valid token");
+
+        assert_eq!(res, Token::Modifier(Modifier::Combine, vec![
+            Token::Modifier(Modifier::Uppercase, vec![
+                Token::Modifier(Modifier::File, vec![Token::String("firstname.txt".to_string())])
+            ]),
+
+            Token::String(".".to_string()),
+
+            Token::Modifier(Modifier::Lowercase, vec![
+                            Token::Modifier(Modifier::File, vec![Token::String("lastname.txt".to_string())])
+            ])
+        ]));
+    }
+
+    #[test]
+    fn test_combine_modifier_three_args() {
+        let unparsed = "combine(\"hello\", \",\", \" world\")";
+        let res = parse(unparsed).expect("valid token");
+
+        assert_eq!(res, Token::Modifier(
+                Modifier::Combine, vec![
+                    Token::String("hello".to_string()),
+                    Token::String(",".to_string()),
+                    Token::String(" world".to_string())
+                ]
+                ));
     }
 
     #[test]
     fn test_parse_uppercase_modifier_with_string_arument() {
         let raw = "uppercase(\"test\")";
-        let mut parser = Parser::new();
+        let res = parse(raw).expect("valid token");
 
-        let res = parser.parse(raw, 0);
-        println!("{:?}", res);
-        assert!(res.is_ok());
-        let res = res.unwrap().0;
 
         assert_eq!(res, Token::Modifier(Modifier::Uppercase, vec![Token::String(String::from("test"))]))
     }
