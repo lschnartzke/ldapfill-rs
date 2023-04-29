@@ -18,11 +18,11 @@ For example, to generate inetOrgPerson entries, the config would look like this:
 
 ```
 [inetOrgPerson]
-cn=combine(file(firstname.txt) " " file(lastname.txt))
-givenName=file(firstname.txt)
-sn=file(lastname.txt)
-uid=lowercase(combine(file(firstname.txt) " " file(lastname.txt))
-mail=lowercase(combine(file(firstname.txt) "." file(lastname.txt) "@" file(domains.txt))
+cn=combine(file("firstname.txt"), " ", file("lastname.txt"))
+givenName=file("firstname.txt")
+sn=file("lastname.txt")
+uid=lowercase(combine(file("firstname.txt"), " " file("lastname.txt"))
+mail=lowercase(combine(file("firstname.txt") "." file("lastname.txt") "@" file("domains.txt"))
 ```
 
 To explain:

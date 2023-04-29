@@ -38,8 +38,6 @@ use std::str::FromStr;
 use pest::{error::Error, iterators::Pair, iterators::Pairs, Parser};
 use thiserror::Error;
 
-mod processor;
-
 pub type ParserResult<'e> = Result<Token, ParserError>;
 pub type PestResult<'r> = Result<Pairs<'r, Rule>, Error<Rule>>;
 
