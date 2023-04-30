@@ -49,7 +49,7 @@ pub enum Token {
 }
 
 // A list of modifiers that can be encountered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modifier {
     Combine,
     Uppercase,

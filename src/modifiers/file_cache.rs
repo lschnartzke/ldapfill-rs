@@ -6,6 +6,10 @@
 //! Every file modifier, internally, has a reference to the global FileCache.
 
 use std::{collections::HashMap, path::PathBuf};
+use std::io;
+use tokio::fs;
+use tokio::io::{self as tio, AsyncBufReadExt};
+use rand::{thread_rng, Rng};
 
 /// A FileCache holds a given number of text files in memory, stored on a line-by-line basis.
 /// File modifiers may request data from a given file, in which case a random line will be 
@@ -22,4 +26,33 @@ impl FileCache {
             cache: Default::default()
         }
     }
-}
+
+    /// Loads an entire file into memory, allowing other functions to access random values from the
+    /// file. The file's lines are stored in a hash map with the path being the key.
+    pub async fn load_file(&mut self, path: PathBuf) -> Result<(), io::Error> {
+        let file = fs::File::open(&path).await?;
+        let reader = tio::BufReader::new(file);
+        let mut line_reader = reader.lines();
+        let mut lines = vec![];
+        
+        while let Some(line) = line_reader.next_line().await? {
+            lines.push(line);
+        }
+
+        self.cache.insert(path, lines);
+
+        Ok(())
+    }
+
+    /// Returns a random line of the specified `file`.
+    ///
+    /// # Panics
+    /// Will panic if the file is not present in the cache.
+    pub fn get_string(&self, file: &PathBuf) -> &'_ str {
+        let index = thread_rng().gen_range(0..self.cache[file].len());
+
+        self.cache[file][index].as_str()
+    }
+} 
+
+
