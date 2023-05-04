@@ -1,0 +1,2 @@
+[inetOrgPerson]
+uid='combine("Hello", ", ", "World!")'

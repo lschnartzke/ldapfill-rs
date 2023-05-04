@@ -79,8 +79,6 @@ pub fn parse(input: &str) -> ParserResult {
     let mut res = CfgParser::parse(Rule::line, input).expect("Valid input");
 
     let res = res.next().expect("at least one pair");
-    #[cfg(test)]
-    println!("{res:#?}");
 
     let mut token = build_token_tree_from_pair(res);
     assert!(token.len() == 1);
@@ -91,7 +89,6 @@ pub fn parse(input: &str) -> ParserResult {
 fn build_token_tree_from_pair(pair: Pair<Rule>) -> Vec<Token> {
     let mut res = vec![];
     let rule = pair.as_rule();
-    println!("build_token_tree_from_pairs(): rule: {rule:?}, pair: {pair:#?}");
 
     match rule {
         Rule::line => {

@@ -1,22 +1,64 @@
 use serde::Deserialize;
-use std::collections::HashMap;
+use anyhow::Error;
 
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
     ldap: Option<LdapConfig>,
+    
+    defaults: Option<DefaultSettings>
 
-    #[serde(flatten)]
-    objects: HashMap<String, String>
+}
 
+#[derive(Debug, Deserialize)]
+pub struct DefaultSettings {
+    #[serde(rename(deserialize = "format-file"))]
+    format_file: Option<String>
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LdapConfig {
     // The server to connect to
-    server: String,
+    pub server: String,
     // The user to use for connecting to the server 
-    user: String,
-    // Optionally, the password to use when connecting.
-    password: Option<String>
+    pub user: String,
+    // The password to use when connecting.
+    pub password: String
+}
+
+impl Config {
+    pub fn load_from_file<A: AsRef<Path>>(path: A) -> Result<Config, Error> {
+        let string = std::fs::read_to_string(path)?;
+        
+        Ok(toml::from_str(string.as_str())?)
+    }
+
+    pub fn ldap(&self) -> Option<&LdapConfig> {
+       self.ldap.as_ref()
+    }
+
+    pub fn defaults(&self) -> Option<&DefaultSettings> {
+        self.defaults.as_ref()
+    }
+}
+
+impl LdapConfig {
+    pub fn server(&self) -> &str {
+        self.server.as_str()
+    }
+
+    pub fn user(&self) -> &str {
+        self.user.as_str()
+    }
+
+    pub fn password(&self) -> &str {
+        self.password.as_str()
+    }
+}
+
+impl DefaultSettings {
+    pub fn format_file(&self) -> Option<&str> {
+        self.format_file.as_ref().map(String::as_str)
+    }
 }

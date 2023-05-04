@@ -1,0 +1,4 @@
+#[ldap]
+
+[defaults]
+format-file = "format.toml"
