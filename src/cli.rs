@@ -37,9 +37,6 @@ pub struct CliArgs {
     /// configuration file, if present.
     pub server: Option<String>,
 
-    /// The amount of entries to generate
-    pub count: u64,
-
     /// The base entry to use when inserting
     pub base: String
 

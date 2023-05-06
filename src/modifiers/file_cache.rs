@@ -41,6 +41,10 @@ impl FileCache {
             lines.push(line);
         }
 
+        if lines.is_empty() {
+            panic!("File must not be empty: {path:?}");
+        }
+
         self.cache.insert(path, lines);
 
         Ok(())

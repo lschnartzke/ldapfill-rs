@@ -33,8 +33,6 @@ impl ModifierTree {
     pub(crate) async fn load_files_into_cache(&self, cache: &mut FileCache) -> io::Result<()> {
         let args = self.collect_file_arguments();
 
-        let mut cache = FileCache::new();
-
         for arg in args {
             cache.load_file(PathBuf::from(arg)).await?;
         }

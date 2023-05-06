@@ -1,3 +1,4 @@
+use log::LevelFilter;
 use serde::Deserialize;
 use anyhow::Error;
 
@@ -5,6 +6,9 @@ use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_log")]
+    log: LevelFilter,
+
     ldap: Option<LdapConfig>,
     
     defaults: Option<DefaultSettings>
@@ -14,7 +18,7 @@ pub struct Config {
 #[derive(Debug, Deserialize)]
 pub struct DefaultSettings {
     #[serde(rename(deserialize = "format-file"))]
-    format_file: Option<String>
+    format_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +36,10 @@ impl Config {
         let string = std::fs::read_to_string(path)?;
         
         Ok(toml::from_str(string.as_str())?)
+    }
+
+    pub fn log(&self) -> LevelFilter {
+        self.log
     }
 
     pub fn ldap(&self) -> Option<&LdapConfig> {
@@ -61,4 +69,8 @@ impl DefaultSettings {
     pub fn format_file(&self) -> Option<&str> {
         self.format_file.as_ref().map(String::as_str)
     }
+}
+
+fn default_log() -> LevelFilter {
+    LevelFilter::Info
 }
