@@ -7,7 +7,10 @@ extern crate log;
 #[macro_use]
 extern crate anyhow;
 
-use std::{collections::{HashMap, VecDeque}, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::Duration,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use anyhow::bail;
@@ -15,17 +18,22 @@ use clap::Parser;
 
 mod cli;
 mod config;
+mod csv;
 mod entries;
 mod error;
 mod format;
+mod ldap_pool;
 mod modifiers;
+mod types;
 
 use cli::CliArgs;
 use config::{Config, LdapConfig};
 use entries::EntryGenerator;
 use format::Format;
 use ldap3::{Ldap, LdapConnAsync};
+use ldap_pool::LdapPool;
 use modifiers::file_cache::{set_file_cache, FileCache};
+use crate::csv::{CsvSender, start_csv_task};
 
 static mut GENERATORS: Option<HashMap<String, EntryGenerator>> = None;
 static mut HIERARCHY: Option<Vec<(String, u64)>> = None;
@@ -35,8 +43,8 @@ lazy_static! {
 
 pub type ResultReceiver = oneshot::Receiver<anyhow::Result<String>>;
 pub type ResultSender = oneshot::Sender<anyhow::Result<String>>;
-pub type Receiver = mpsc::UnboundedReceiver<(String, &'static EntryGenerator, ResultSender )>;
-pub type Sender   = mpsc::UnboundedSender<(String, &'static EntryGenerator, ResultSender)>;
+pub type Receiver = mpsc::UnboundedReceiver<(String, &'static EntryGenerator, ResultSender)>;
+pub type Sender = mpsc::UnboundedSender<(String, &'static EntryGenerator, ResultSender)>;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -71,7 +79,12 @@ async fn main() -> anyhow::Result<()> {
         return Err(e);
     }
 
-    let ldap = connect_to_ldap_using_args_or_config(args, &config).await?;
+    let Some(mut ldap_config) = config.ldap().cloned().or_else(|| LdapConfig::from_args(args)) else {
+        error!("Missing required parameters to connect to server. Check config or provide via cli (--help for more info)");
+        bail!("Missing required server information");
+    };
+
+    ldap_config.merge_args(args);
 
     // you're not supposed to fight or work around the borrow checker,
     // but I need to hand in bachelors thesis in less than 2 months, so
@@ -83,7 +96,11 @@ async fn main() -> anyhow::Result<()> {
     let generators = unsafe { GENERATORS.as_ref().unwrap() };
     let hierarchy = unsafe { HIERARCHY.as_ref().unwrap() };
 
-    if let Err(e) = fill_ldap(ldap, generators, hierarchy, args.base.as_str()).await {
+    let csv_sender = if args.csv {
+        Some(start_csv_task(args.csv_directory.as_str()).await?)
+    } else { None };
+
+    if let Err(e) = fill_ldap(ldap_config, generators, hierarchy, args.base.as_str(), csv_sender).await {
         error!("Failed to fill directory: {e}");
         return Err(e);
     }
@@ -94,10 +111,11 @@ async fn main() -> anyhow::Result<()> {
 // creates tasks to fill up the directory in parallel, task size is determined by available cpus
 // and amount of entries to generate. Whatever is smaller determines the task size.
 async fn fill_ldap(
-    conn: Ldap,
+    ldap_config: LdapConfig,
     generators: &'static HashMap<String, EntryGenerator>,
     hierarchy: &'static [(String, u64)],
     base: &'static str,
+    csv_sender: Option<CsvSender>
 ) -> anyhow::Result<()> {
     let (_, count) = &hierarchy[0];
     let cpus = num_cpus::get() as u64;
@@ -107,6 +125,8 @@ async fn fill_ldap(
         *count
     };
 
+    let pool = LdapPool::new(ldap_config).await?;
+
     info!("Generating entries using {task_count} tasks");
 
     // Generate channels and tasks
@@ -114,9 +134,10 @@ async fn fill_ldap(
         let mut res = VecDeque::with_capacity(task_count as usize);
         for _ in 0..task_count {
             let (tx, rx) = mpsc::unbounded_channel();
-            let cc = conn.clone();
-            
-            tokio::spawn(async move { fill_level(cc, rx).await });
+            let cc = pool.get_conn();
+
+            let sender = csv_sender.clone();
+            tokio::spawn(async move { fill_level(cc, rx, sender).await });
             res.push_back(tx);
         }
         res
@@ -141,7 +162,7 @@ async fn fill_ldap(
                     let (sender, result) = oneshot::channel();
                     results.push(result);
                     count -= 1;
-                    
+
                     if let Err(e) = tx.send((dn.clone(), generator, sender)) {
                         warn!("Error when trying to send data to fill-task: {e}");
                     }
@@ -152,40 +173,40 @@ async fn fill_ldap(
                 }
             }
 
-             for result in results.drain(..results.len()){
+            for result in results.drain(..results.len()) {
                 let res = result.await;
                 match res {
                     Ok(Ok(res)) => new_dns.push(res),
                     Ok(Err(e)) => warn!("Got result; it failed: {e}"),
                     Err(e) => warn!("Failed to receive result: {e}"),
                 }
-             }
+            }
         }
         dns.clear();
         dns.extend(new_dns);
-/*
-        for dn in dns.iter() {
-            for _ in 0..count {
-                let cc = conn.clone();
-                let dn = dn.clone();
-                let task =
-                    tokio::spawn(async move { fill_level(cc, generator, dn).await });
-                tasks.push(task);
-            }
-        }
-        dns.clear();
-
-        for task in tasks {
-            match task.await? {
-                Ok(dn) => dns.push(dn),
-                Err(e) => {
-                    debug!("task error: {e:#?}");
-                    error!("Got task error when filling directory: {e}");
+        /*
+                for dn in dns.iter() {
+                    for _ in 0..count {
+                        let cc = conn.clone();
+                        let dn = dn.clone();
+                        let task =
+                            tokio::spawn(async move { fill_level(cc, generator, dn).await });
+                        tasks.push(task);
+                    }
                 }
-            }
+                dns.clear();
 
-        }
-*/
+                for task in tasks {
+                    match task.await? {
+                        Ok(dn) => dns.push(dn),
+                        Err(e) => {
+                            debug!("task error: {e:#?}");
+                            error!("Got task error when filling directory: {e}");
+                        }
+                    }
+
+                }
+        */
     }
 
     let end = std::time::Instant::now();
@@ -199,21 +220,15 @@ async fn fill_ldap(
     Ok(())
 }
 
-// 
-async fn fill_level(
-    mut ldap: Ldap,
-    mut rx: Receiver
-    ) {
-    
+//
+async fn fill_level(mut ldap: Ldap, mut rx: Receiver, mut csv_sender: Option<CsvSender>) {
     while let Some((dn, generator, result_sender)) = rx.recv().await {
-        let res = add_entry(&mut ldap, generator, dn).await;
+        let res = add_entry(&mut ldap, generator, dn, csv_sender.as_ref()).await;
 
-        if let Err(_) = result_sender.send(res) {
+        if result_sender.send(res).is_err() {
             warn!("Failed to return result, error: channel closed");
         }
-
     }
-
 }
 ///
 /// Creates one entry for the provided base level. Returns the generated entry dn.
@@ -221,6 +236,7 @@ async fn add_entry(
     ldap: &mut Ldap,
     generator: &EntryGenerator,
     base: String,
+    csv_sender: Option<&CsvSender>
 ) -> anyhow::Result<String> {
     let (rdn, entry) = generator.generate_entry();
     let dn = format!("{rdn},{base}");
@@ -228,6 +244,14 @@ async fn add_entry(
     if let Err(e) = ldap.add(dn.as_str(), entry.clone()).await?.success() {
         debug!("entry {entry:#?} caused error during add: dn: {dn} error: {e:#?}");
         warn!("Error during entry insertion: {e}");
+    }
+
+    // even if the entry failed to add, we can now test invalid entries as well, yay
+    if let Some(sender) = csv_sender {
+        // Ignore the result. If this fails, the writer task quit early. In that case,
+        // we have different problems as we're holding a sender handle and the task 
+        // should not quit unless all senders are dropped.
+        drop(sender.send((generator.object_class().to_owned(), entry)));
     }
 
     Ok(dn)
@@ -251,7 +275,7 @@ async fn fill_task(
 
         for _ in 0..*count {
             let (rdn, entry) = generator.generate_entry();
-            let entry_dn = format!("{},{}", rdn, base);
+            let entry_dn = format!("{rdn},{base}");
 
             debug!("Inserting entry {entry:#?} at {entry_dn}");
 
@@ -289,6 +313,7 @@ async fn connect_to_ldap_using_args_or_config(
             server,
             user,
             password,
+            ..
         }) => (server.clone(), user.clone(), password.clone()),
         None => ldap_settings_from_args(args)?,
     };

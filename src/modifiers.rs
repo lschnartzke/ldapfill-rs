@@ -42,7 +42,7 @@ impl ModifierTree {
 
     /// Collects all arguments to `ModifierKind::File`s. Panics if the
     /// argument is not a string.
-    pub fn collect_file_arguments<'s>(&'s self) -> Vec<&'s str> {
+    pub fn collect_file_arguments(&self) -> Vec<&str> {
         let mut res = vec![];
 
         match *self {

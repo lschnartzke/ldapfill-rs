@@ -28,7 +28,7 @@ pub struct CliArgs {
     /// attribute values into csv files. The files will be named <objectClass>.csv.
     pub csv: bool,
 
-    #[arg(short = 'D' , long, default_value_t = String::from("."))]
+    #[arg(short = 'D' , long, default_value_t = String::from("./csv"))]
     /// Set the directory to export the csv files to.
     pub csv_directory: String,
 
@@ -36,6 +36,12 @@ pub struct CliArgs {
     /// The server to connect to. Overrides the default specified in the 
     /// configuration file, if present.
     pub server: Option<String>,
+
+    /// How many (simultaneous) connections to the server should be created.
+    /// The connections will be shared between worker tasks to achieve a 
+    /// higher throughput.
+    #[arg(short = 'n', long)]
+    pub connections: Option<usize>,
 
     /// The base entry to use when inserting
     pub base: String

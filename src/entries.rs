@@ -23,6 +23,10 @@ impl EntryGenerator {
         }
     }
 
+    pub fn object_class(&self) -> &str {
+        self.object_class.as_str()
+    }
+
     pub fn generate_entry(&self) -> (String, Vec<(String, HashSet<String>)>) {
         let mut entry = vec![("objectclass".to_string(), HashSet::from([self.object_class.clone()]))];
         let mut rdn: Option<String> = None;

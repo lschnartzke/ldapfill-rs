@@ -1,5 +1,5 @@
 hierarchy = ["country", "locality", "organizationalUnit", "inetOrgPerson"]
-count     = [ 1       , 2         , 3                   , 4 ]
+count     = [ 50       , 10         , 20                   , 20 ]
 
 [locality]
 rdn = "l"
