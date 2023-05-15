@@ -87,3 +87,9 @@ pub fn get_file_cache() -> &'static FileCache {
     }
 }
 
+
+impl Default for FileCache {
+    fn default() -> Self {
+        FileCache::new()
+    }
+}

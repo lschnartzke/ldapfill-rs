@@ -7,10 +7,7 @@ extern crate log;
 #[macro_use]
 extern crate anyhow;
 
-use std::{
-    collections::{HashMap, VecDeque},
-    time::Duration,
-};
+use std::collections::{HashMap, VecDeque};
 use tokio::sync::{mpsc, oneshot};
 
 use anyhow::bail;
@@ -25,12 +22,13 @@ mod format;
 mod ldap_pool;
 mod modifiers;
 mod types;
+mod progress;
 
 use cli::CliArgs;
 use config::{Config, LdapConfig};
 use entries::EntryGenerator;
 use format::Format;
-use ldap3::{Ldap, LdapConnAsync};
+use ldap3::Ldap;
 use ldap_pool::LdapPool;
 use modifiers::file_cache::{set_file_cache, FileCache};
 use crate::csv::{CsvSender, start_csv_task};
@@ -57,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     env_logger::builder().filter_level(config.log()).init();
 
     let Some(format_file_path) = (match config.defaults() {
-        Some(defaults) => defaults.format_file().or(args.format_file.as_deref()),
+        Some(defaults) => args.format_file.as_deref().or(defaults.format_file()),
         None => args.format_file.as_deref(),
     }) else {
         bail!("path to format file must be specified either in the configuration or using the --format-file option");
@@ -119,6 +117,7 @@ async fn fill_ldap(
 ) -> anyhow::Result<()> {
     let (_, count) = &hierarchy[0];
     let cpus = num_cpus::get() as u64;
+    let entry_count = hierarchy.iter().map(|(_, c)| *c).product::<u64>();
     let task_count = if cpus < *count {
         cpus * 12 // for good measure
     } else {
@@ -127,7 +126,7 @@ async fn fill_ldap(
 
     let pool = LdapPool::new(ldap_config).await?;
 
-    info!("Generating entries using {task_count} tasks");
+    info!("Generating up to {entry_count} entries using {task_count} tasks");
 
     // Generate channels and tasks
     let channels: VecDeque<Sender> = {
@@ -145,6 +144,7 @@ async fn fill_ldap(
 
     let start = std::time::Instant::now();
     let mut dns: Vec<String> = vec![base.to_owned()];
+    let  ptx = progress::start_progress_task(entry_count).await;
 
     for (object_class, count) in hierarchy.iter() {
         // performance-wise this feels terrible, but maybe the compiler can optimise this away
@@ -167,6 +167,8 @@ async fn fill_ldap(
                         warn!("Error when trying to send data to fill-task: {e}");
                     }
 
+                    drop(ptx.send(()));
+
                     if count == 0 {
                         break 'outer;
                     }
@@ -184,29 +186,6 @@ async fn fill_ldap(
         }
         dns.clear();
         dns.extend(new_dns);
-        /*
-                for dn in dns.iter() {
-                    for _ in 0..count {
-                        let cc = conn.clone();
-                        let dn = dn.clone();
-                        let task =
-                            tokio::spawn(async move { fill_level(cc, generator, dn).await });
-                        tasks.push(task);
-                    }
-                }
-                dns.clear();
-
-                for task in tasks {
-                    match task.await? {
-                        Ok(dn) => dns.push(dn),
-                        Err(e) => {
-                            debug!("task error: {e:#?}");
-                            error!("Got task error when filling directory: {e}");
-                        }
-                    }
-
-                }
-        */
     }
 
     let end = std::time::Instant::now();
@@ -221,7 +200,7 @@ async fn fill_ldap(
 }
 
 //
-async fn fill_level(mut ldap: Ldap, mut rx: Receiver, mut csv_sender: Option<CsvSender>) {
+async fn fill_level(mut ldap: Ldap, mut rx: Receiver, csv_sender: Option<CsvSender>) {
     while let Some((dn, generator, result_sender)) = rx.recv().await {
         let res = add_entry(&mut ldap, generator, dn, csv_sender.as_ref()).await;
 
@@ -257,38 +236,6 @@ async fn add_entry(
     Ok(dn)
 }
 
-// ATM this function is creating more objects than it should, as it using the entry count of the
-// current hierarchy level. However, this count also specifies the amount of tasks to use in total,
-// creating count^2 entries, if possible.
-async fn fill_task(
-    mut conn: Ldap,
-    generators: &HashMap<String, EntryGenerator>,
-    hierarchy: &Vec<(String, u64)>,
-    base: &str,
-) -> anyhow::Result<()> {
-    debug!("Fill task");
-    let base = base.to_string();
-    let mut level_rdns: Vec<String> = vec![];
-    for (class, count) in hierarchy {
-        debug!("Generating entry for class {class}, {count} entries in total");
-        let generator = &generators[class];
-
-        for _ in 0..*count {
-            let (rdn, entry) = generator.generate_entry();
-            let entry_dn = format!("{rdn},{base}");
-
-            debug!("Inserting entry {entry:#?} at {entry_dn}");
-
-            if let Err(e) = conn.add(entry_dn.as_ref(), entry).await?.success() {
-                warn!("Failed to insert entry at {base}: {e}");
-            }
-            level_rdns.push(entry_dn);
-        }
-    }
-
-    Ok(())
-}
-
 async fn build_file_cache<'e, T>(generators: T) -> anyhow::Result<()>
 where
     T: Iterator<Item = &'e EntryGenerator>,
@@ -302,51 +249,4 @@ where
     set_file_cache(cache);
 
     Ok(())
-}
-
-async fn connect_to_ldap_using_args_or_config(
-    args: &CliArgs,
-    config: &Config,
-) -> Result<Ldap, anyhow::Error> {
-    let (server, user, password) = match config.ldap() {
-        Some(LdapConfig {
-            server,
-            user,
-            password,
-            ..
-        }) => (server.clone(), user.clone(), password.clone()),
-        None => ldap_settings_from_args(args)?,
-    };
-
-    info!("Connecting to {server}...");
-    let (conn, mut ldap) = LdapConnAsync::new(server.as_str()).await?;
-    tokio::spawn(async move {
-        if let Err(e) = conn.drive().await {
-            debug!("LDAP conn error: {e:#?}");
-            error!("LDAP Connection exited with error: {e}");
-            panic!("{e}");
-        }
-    });
-
-    info!("Attempting to bind to the server using {user}...");
-    ldap.simple_bind(user.as_str(), password.as_str()).await?;
-
-    Ok(ldap)
-}
-
-fn ldap_settings_from_args(args: &CliArgs) -> Result<(String, String, String), anyhow::Error> {
-    let Some(user) = args.user.clone() else {
-        bail!("Missing required --user option");
-    };
-
-    let Some(server) = args.server.clone() else {
-        bail!("Missing required --server option");
-    };
-
-    let password = match args.password {
-        true => rpassword::prompt_password("Password: ")?,
-        false => String::new(),
-    };
-
-    Ok((server, user, password))
 }
