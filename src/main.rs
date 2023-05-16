@@ -31,7 +31,7 @@ use format::Format;
 use ldap3::Ldap;
 use ldap_pool::LdapPool;
 use modifiers::file_cache::{set_file_cache, FileCache};
-use crate::csv::{CsvSender, start_csv_task};
+use crate::{csv::{CsvSender, start_csv_task}, progress::ProgressMessage};
 
 static mut GENERATORS: Option<HashMap<String, EntryGenerator>> = None;
 static mut HIERARCHY: Option<Vec<(String, u64)>> = None;
@@ -52,7 +52,6 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::load_from_file(cfg)?;
 
-    env_logger::builder().filter_level(config.log()).init();
 
     let Some(format_file_path) = (match config.defaults() {
         Some(defaults) => args.format_file.as_deref().or(defaults.format_file()),
@@ -163,11 +162,12 @@ async fn fill_ldap(
                     results.push(result);
                     count -= 1;
 
+                    let mut message = ProgressMessage::Progress;
                     if let Err(e) = tx.send((dn.clone(), generator, sender)) {
-                        warn!("Error when trying to send data to fill-task: {e}");
+                        message = ProgressMessage::ProgressWithMessage(format!("Error when trying to send data to fill-task: {e}"));
                     }
 
-                    drop(ptx.send(()));
+                    drop(ptx.send(message));
 
                     if count == 0 {
                         break 'outer;
@@ -179,8 +179,8 @@ async fn fill_ldap(
                 let res = result.await;
                 match res {
                     Ok(Ok(res)) => new_dns.push(res),
-                    Ok(Err(e)) => warn!("Got result; it failed: {e}"),
-                    Err(e) => warn!("Failed to receive result: {e}"),
+                    Ok(Err(e)) => drop(ptx.send(ProgressMessage::Message(format!("Got result; it failed: {e}")))),
+                    Err(e) => drop(ptx.send(ProgressMessage::Message(format!("Failed to receive result: {e}")))),
                 }
             }
         }
@@ -223,6 +223,7 @@ async fn add_entry(
     if let Err(e) = ldap.add(dn.as_str(), entry.clone()).await?.success() {
         debug!("entry {entry:#?} caused error during add: dn: {dn} error: {e:#?}");
         warn!("Error during entry insertion: {e}");
+        bail!("{e}")
     }
 
     // even if the entry failed to add, we can now test invalid entries as well, yay
