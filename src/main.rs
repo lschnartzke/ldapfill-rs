@@ -164,7 +164,7 @@ async fn fill_ldap(
 
                     let mut message = ProgressMessage::Progress;
                     if let Err(e) = tx.send((dn.clone(), generator, sender)) {
-                        message = ProgressMessage::ProgressWithMessage(format!("Error when trying to send data to fill-task: {e}"));
+                        //message = ProgressMessage::ProgressWithMessage(format!("Error when trying to send data to fill-task: {e}"));
                     }
 
                     drop(ptx.send(message));
