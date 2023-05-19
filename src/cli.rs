@@ -43,6 +43,11 @@ pub struct CliArgs {
     #[arg(short = 'n', long)]
     pub connections: Option<usize>,
 
+    /// If present, export the generated entries to the specified file.
+    /// The program is not perfect, it may output a file that contains 
+    /// invalid data. Please keep that in mind.
+    pub ldif: Option<String>,
+
     /// The base entry to use when inserting
     pub base: String
 

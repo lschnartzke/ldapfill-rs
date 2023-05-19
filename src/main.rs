@@ -23,6 +23,7 @@ mod ldap_pool;
 mod modifiers;
 mod types;
 mod progress;
+mod ldif;
 
 use cli::CliArgs;
 use config::{Config, LdapConfig};
@@ -32,6 +33,7 @@ use ldap3::Ldap;
 use ldap_pool::LdapPool;
 use modifiers::file_cache::{set_file_cache, FileCache};
 use crate::{csv::{CsvSender, start_csv_task}, progress::ProgressMessage};
+use crate::ldif::start_ldif_export_task;
 
 static mut GENERATORS: Option<HashMap<String, EntryGenerator>> = None;
 static mut HIERARCHY: Option<Vec<(String, u64)>> = None;
@@ -51,7 +53,6 @@ async fn main() -> anyhow::Result<()> {
     let cfg = args.config_file.as_str();
 
     let config = Config::load_from_file(cfg)?;
-
 
     let Some(format_file_path) = (match config.defaults() {
         Some(defaults) => args.format_file.as_deref().or(defaults.format_file()),
@@ -84,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     ldap_config.merge_args(args);
 
     // you're not supposed to fight or work around the borrow checker,
-    // but I need to hand in bachelors thesis in less than 2 months, so
+    // but I need to hand in a bachelors thesis in less than 2 months, so
     // I don't have the time to work around this properly.
     unsafe {
         GENERATORS = Some(generators);
@@ -96,6 +97,12 @@ async fn main() -> anyhow::Result<()> {
     let csv_sender = if args.csv {
         Some(start_csv_task(args.csv_directory.as_str()).await?)
     } else { None };
+
+    let ldif_sender = if let Some(ref file) = args.ldif {
+        Some(ldif::start_ldif_export_task(file).await?)
+    } else {
+        None
+    };
 
     if let Err(e) = fill_ldap(ldap_config, generators, hierarchy, args.base.as_str(), csv_sender).await {
         error!("Failed to fill directory: {e}");
