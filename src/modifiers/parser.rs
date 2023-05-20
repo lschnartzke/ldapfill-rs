@@ -42,7 +42,7 @@ pub type ParserResult<'e> = Result<Token, ParserError>;
 pub type PestResult<'r> = Result<Pairs<'r, Rule>, Error<Rule>>;
 
 /// Individual entities that can be encountered when parsing config files
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     Modifier(Modifier, Vec<Token>),
     String(String),

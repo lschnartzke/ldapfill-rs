@@ -1,4 +1,6 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
+
+use crate::csv::CsvSender;
 
 #[derive(Parser)]
 #[clap(version, author, about, long_about = None)]
@@ -12,16 +14,6 @@ pub struct CliArgs {
     /// is required if there is no file set in the configuration.
     #[arg(short, long)]
     pub format_file: Option<String>,
-
-    #[arg(short, long)]
-    /// The user to use when connecting to the LDAP server. Overrides the value specified in the
-    /// config.
-    pub user: Option<String>,
-
-    #[arg(short, long)]
-    /// Whether to use a password. If set, the user will be prompted for the login password before
-    /// connecting to the server. Overrides the value specified in the config, if present.
-    pub password: bool,
     
     #[arg(short = 'C', long)]
     /// If set, exports files corresponding to object classes and their 
@@ -32,24 +24,41 @@ pub struct CliArgs {
     /// Set the directory to export the csv files to.
     pub csv_directory: String,
 
-    #[arg(short, long)]
-    /// The server to connect to. Overrides the default specified in the 
-    /// configuration file, if present.
-    pub server: Option<String>,
-
-    /// How many (simultaneous) connections to the server should be created.
-    /// The connections will be shared between worker tasks to achieve a 
-    /// higher throughput.
-    #[arg(short = 'n', long)]
-    pub connections: Option<usize>,
-
-    /// If present, export the generated entries to the specified file.
-    /// The program is not perfect, it may output a file that contains 
-    /// invalid data. Please keep that in mind.
-    pub ldif: Option<String>,
-
     /// The base entry to use when inserting
-    pub base: String
+    pub base: String,
 
+    #[command(subcommand)]
+    pub cmd: MainCommand
+}
 
+#[derive(Debug, Clone, Subcommand)]
+pub enum MainCommand {
+    /// Export generated entries into an ldif file.
+    Export {
+        /// The file to export to
+        #[arg(long)]
+        file: String
+    },
+    /// Directly add the generated entries to a running server
+    Insert {
+        #[arg(short, long)]
+        server: Option<String>,
+        #[arg(short, long)]
+        user: Option<String>,
+        #[arg(short, long)]
+        password: bool,
+
+        #[arg(short = 'n', long, default_value_t = 1)]
+        connections: usize
+    }
+}
+
+impl CliArgs {
+    pub async fn csv_sender(&self) -> anyhow::Result<Option<CsvSender>> {
+        if self.csv {
+            Ok(Some(crate::csv::start_csv_task(self.csv_directory.as_str()).await?))
+        } else {
+            Ok(None)
+        }
+    }
 }

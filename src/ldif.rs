@@ -18,7 +18,7 @@ use crate::types::{LdifSender, LdifReceiver, LdapEntry};
 pub async fn start_ldif_export_task<P: AsRef<Path>>(export_file: P) -> anyhow::Result<LdifSender> {
     let (tx, rx) = unbounded_channel();
 
-    let file = tfs::File::open(export_file).await?;
+    let file = tfs::File::create(export_file).await?;
     let writer = tio::BufWriter::new(file);
 
     tokio::spawn(async move { ldif_exporter(rx, writer).await });
