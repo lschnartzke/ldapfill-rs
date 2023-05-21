@@ -56,9 +56,11 @@ async fn csv_exporter_inner(export_path: PathBuf, receiver: CsvReceiver) -> anyh
     let mut object_classes: HashMap<String, Vec<String>> = HashMap::new();
     let mut last_flush = Instant::now();
 
-    while let Some((object_class, attributes)) = stream.next().await {
-        if !object_classes.contains_key(object_class.as_str()) {
-            handle_new_object_class(&mut object_classes, object_class.as_str(), &attributes);
+    while let Some((_, attributes)) = stream.next().await {
+        let object_class = attributes.iter().find(|(k, _)| k.to_lowercase() == "objectclass").map(|(_, v)| v.iter().next().unwrap().as_str()).unwrap();
+
+        if !object_classes.contains_key(object_class) {
+            handle_new_object_class(&mut object_classes, object_class, &attributes);
         }
 
         // get the writer
@@ -72,13 +74,13 @@ async fn csv_exporter_inner(export_path: PathBuf, receiver: CsvReceiver) -> anyh
             let file = format!("{object_class}.csv");
             match task::block_in_place(|| open_new_writer(export_path.join(file))) {
                 Ok(mut w) => {
-                    let order = &object_classes[&object_class];
+                    let order = &object_classes[object_class];
 
                     if let Err(e) = w.write_record(order) {
                         warn!("Failed to write header row for {object_class}: {e}");
                     }
 
-                    writers.push((object_class.clone(), w));
+                    writers.push((object_class.to_owned(), w));
                     writers
                         .iter_mut()
                         .find(|(c, _)| *c == object_class)
@@ -92,7 +94,7 @@ async fn csv_exporter_inner(export_path: PathBuf, receiver: CsvReceiver) -> anyh
             }
         };
 
-        let order = &object_classes[&object_class];
+        let order = &object_classes[object_class];
         let mut record: Vec<&str> = Vec::with_capacity(order.len());
 
         // put reference in the correct `order` for the csv file
