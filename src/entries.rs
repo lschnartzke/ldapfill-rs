@@ -71,7 +71,7 @@ pub fn entry_generator_task(
     generators: &'static HashMap<String, EntryGenerator>,
     hierarchy: &'static [(String, u64)],
 ) -> EntryReceiver {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(500_000);
 
     tokio::spawn(async move {
         let mut dns = vec![base];
@@ -85,7 +85,7 @@ pub fn entry_generator_task(
                     let entry = generate_entry(dn, generator);
                     new_dns.push(entry.0.clone());
 
-                    tx.send(entry).unwrap();
+                    tx.send(entry).await.unwrap();
                 }
             }
             dns.clear();

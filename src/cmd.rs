@@ -1,5 +1,5 @@
 use indicatif::{ProgressBar, ProgressStyle};
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::{cli::{CliArgs, MainCommand}, entries::EntryGenerator};
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ pub async fn export_cmd(args: &CliArgs) -> anyhow::Result<()> {
     let ldif_sender = crate::ldif::start_ldif_export_task(ldif_file).await?;
     let entry_receiver = crate::entries::entry_generator_task(args.base.clone(), get_generators(), get_hierarchy());
 
-    let mut entry_stream = UnboundedReceiverStream::new(entry_receiver);
+    let mut entry_stream = ReceiverStream::new(entry_receiver);
     while let Some(entry) = entry_stream.next().await {
         if let Some(ref sender) = csv_sender {
             sender.send(entry.clone()).expect("csv_task to be running");
