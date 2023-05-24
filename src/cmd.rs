@@ -1,7 +1,7 @@
 use indicatif::{ProgressBar, ProgressStyle};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_stream::{wrappers::{ReceiverStream, UnboundedReceiverStream}, StreamExt};
 
-use crate::{cli::{CliArgs, MainCommand}, entries::EntryGenerator};
+use crate::{cli::{CliArgs, MainCommand}, entries::EntryGenerator, config::LdapConfig, ldap_pool::LdapPool};
 use std::collections::HashMap;
 
 
@@ -66,9 +66,42 @@ pub async fn export_cmd(args: &CliArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[allow(unreachable_code)]
 pub async fn insert_cmd(args: &CliArgs) -> anyhow::Result<()> {
-    unimplemented!();
+    let count = get_hierarchy().iter().map(|(_, c)| c).product::<u64>();
 
-    Ok(())
+    let Some(ldap_config) = LdapConfig::from_args(args) else { bail!("user, server, password required") };
+    let pool = LdapPool::new(ldap_config).await?;
+
+    let style = ProgressStyle::with_template("{wide_bar} [{pos}/{len}] ({percent}%) {msg} [{elapsed}/{eta}]").expect("Valid style");
+    let bar = ProgressBar::new(count);
+    bar.set_style(style);
+
+    let csv_sender = args.csv_sender().await?;
+    let entry_receiver = crate::entries::entry_generator_task(args.base.clone(), get_generators(), get_hierarchy());
+    let (entry_sender, result_receiver) = crate::entries::insert_entries_task(pool);
+
+    // handle the progress bar in its own task 
+    let bar_task = tokio::spawn(async move {
+        let mut result_stream = UnboundedReceiverStream::new(result_receiver);
+
+        while let Some(res) = result_stream.next().await {
+            bar.inc(1);
+
+            if let Err(e) = res {
+                bar.println(format!("Error: {e}"));
+            }
+        }
+    });
+
+    let mut entry_stream = ReceiverStream::new(entry_receiver);
+    while let Some(entry) = entry_stream.next().await {
+        if let Some(ref csv_sender) = csv_sender {
+            csv_sender.send(entry.clone()).unwrap();
+        }
+
+        entry_sender.send(entry).await.unwrap();
+    }
+    
+
+    Ok(bar_task.await?)
 }

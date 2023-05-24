@@ -1,10 +1,11 @@
 use crate::progress;
-use crate::types::{EntryReceiver, LdapEntry};
+use crate::types::{EntryReceiver, LdapEntry, EntrySender};
 use crate::{LdapConfig, LdapPool, ProgressMessage, Receiver, ResultReceiver, Sender};
 
 use crate::csv::CsvSender;
 use crate::modifiers::{file_cache::FileCache, ModifierTree};
 use ldap3::Ldap;
+use tokio_stream::StreamExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use tokio::sync::{mpsc, oneshot};
@@ -101,6 +102,28 @@ fn generate_entry(base: &str, generator: &EntryGenerator) -> LdapEntry {
     let dn = format!("{rdn},{base}");
 
     (dn, entry)
+}
+
+pub fn insert_entries_task(pool: LdapPool) -> (EntrySender, mpsc::UnboundedReceiver<Result<(), Box<dyn std::error::Error + Send>>>) {
+    let (entry_tx, entry_rx) = mpsc::channel::<LdapEntry>(500_000);
+    let (result_tx, result_rx) = mpsc::unbounded_channel::<Result<(), Box<dyn std::error::Error + Send>>>();
+
+    // for now only use one connection, even if we have more. 
+    let mut conn = pool.get_conn();
+
+    tokio::spawn(async move {
+        let (rx, tx) = (entry_rx, result_tx);
+        
+        let mut stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        while let Some((dn, attributes)) = stream.next().await {
+            match conn.add(&dn, attributes).await {
+                Ok(_) => tx.send(Ok(())).unwrap(),
+                Err(e) => tx.send(Err(Box::new(e))).unwrap()
+            }
+        }
+    });
+    
+    (entry_tx, result_rx)
 }
 
 // creates tasks to fill up the directory in parallel, task size is determined by available cpus
