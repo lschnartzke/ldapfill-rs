@@ -56,7 +56,7 @@ async fn csv_exporter_inner(export_path: PathBuf, receiver: CsvReceiver) -> anyh
     let mut object_classes: HashMap<String, Vec<String>> = HashMap::new();
     let mut last_flush = Instant::now();
 
-    while let Some((_, attributes)) = stream.next().await {
+    while let Some((dn, mut attributes)) = stream.next().await {
         let object_class = attributes.iter().find(|(k, _)| k.to_lowercase() == "objectclass").map(|(_, v)| v.iter().next().unwrap().as_str()).unwrap();
 
         if !object_classes.contains_key(object_class) {
@@ -97,6 +97,8 @@ async fn csv_exporter_inner(export_path: PathBuf, receiver: CsvReceiver) -> anyh
         let order = &object_classes[object_class];
         let mut record: Vec<&str> = Vec::with_capacity(order.len());
 
+        attributes.push((String::from("dn"), HashSet::from([dn.clone()])));
+        attributes.push((String::from("rdn"), HashSet::from([dn.split_once(",").unwrap().1.to_owned()])));
         // put reference in the correct `order` for the csv file
         // we do this by iterating through the attributes of the determined order,
         // look for the current attribute in the list of attributes of the received entry
@@ -141,11 +143,15 @@ fn handle_new_object_class(
     new_class: &str,
     new_attributes: &[(String, HashSet<String>)],
 ) {
-    let order: Vec<String> = new_attributes
+    let mut order: Vec<String> = new_attributes
         .iter()
         .map(|(s, _)| s)
         .map(String::to_owned)
         .collect();
+    
+    order.insert(0, String::from("rdn"));
+    order.insert(0, String::from("dn"));
+
     class_map.insert(new_class.to_owned(), order);
 }
 

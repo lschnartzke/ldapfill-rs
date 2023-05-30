@@ -1,5 +1,6 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio_stream::{wrappers::{ReceiverStream, UnboundedReceiverStream}, StreamExt};
+use tokio::time;
 
 use crate::{cli::{CliArgs, MainCommand}, entries::EntryGenerator, config::LdapConfig, ldap_pool::LdapPool};
 use std::collections::HashMap;
@@ -76,12 +77,18 @@ pub async fn insert_cmd(args: &CliArgs) -> anyhow::Result<()> {
     let bar = ProgressBar::new(count);
     bar.set_style(style);
 
+
     let csv_sender = args.csv_sender().await?;
     let entry_receiver = crate::entries::entry_generator_task(args.base.clone(), get_generators(), get_hierarchy());
     let (entry_sender, result_receiver) = crate::entries::insert_entries_task(pool);
 
     // handle the progress bar in its own task 
     let bar_task = tokio::spawn(async move {
+        // statistics
+        let mut count = 0;
+        let start = time::Instant::now();
+        let mut current_interval = start;
+        let mut current_count = 0;
         let mut result_stream = UnboundedReceiverStream::new(result_receiver);
 
         while let Some(res) = result_stream.next().await {
@@ -90,7 +97,25 @@ pub async fn insert_cmd(args: &CliArgs) -> anyhow::Result<()> {
             if let Err(e) = res {
                 bar.println(format!("Error: {e}"));
             }
+
+
+            count += 1;
+            current_count += 1;
+
+            let now = time::Instant::now();
+            if (now - current_interval).as_secs() >= 1 {
+                let msg = format!("{current_count} entries/second");
+                bar.set_message(msg.clone());
+                current_count = 0;
+                current_interval = now;
+            }
         }
+
+        let end = time::Instant::now();
+        let total_duration = end-start;
+        let avg = count/total_duration.as_secs();
+        let msg = format!("Created {avg} entries/second on average");
+        bar.finish_with_message(msg);
     });
 
     let mut entry_stream = ReceiverStream::new(entry_receiver);
