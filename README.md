@@ -66,12 +66,6 @@ from the file will be used. If it cannot be resolved to a file, the value will b
 * uppercase(arg) - Will transform the value or result of previous modifiers into uppercase
 
 # Generated Output
-`ldapfill` can create different kinds of output, depending on the parameters. Ideally, the output 
-can be used for other tools, such as Jmeter, to perform benchmarks on servers without having to
-manually create all tests and directory content from scratch.
-
-Aside from the directory content itself, the tool can create search queries with a given filter 
-template, (randomly chosen) search base and a given chance that the search will return no results.
-
-The output for these queries will be stored in text files, using the chosen format (e.g. Jmeter test,
-json, ldif, ...)
+When using `export`, `ldapfill` will generate LDIF-Files containing the generated entries, using the provided
+base-dn. Additionally, it is possible to export the generated ldif as CSV, allowing you to use the 
+entries, for example, with JMeter.
