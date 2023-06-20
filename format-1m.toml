@@ -1,0 +1,23 @@
+hierarchy = ["country", "organization", "organizationalUnit", "inetOrgPerson"]
+count     = [ 10       , 100         , 50                   , 20 ]
+
+[organization]
+rdn = "o"
+o = 'lowercase(file("cities.txt"))'
+
+[country]
+rdn = "c"
+c='lowercase(file("country-codes.txt"))'
+
+[organizationalUnit]
+rdn="ou"
+ou='file("regions.txt")'
+
+[inetOrgPerson]
+rdn="cn"
+cn='combine(file("firstname.txt"), " ", file("lastname.txt"))'
+givenName='file("firstname.txt")'
+sn='file("lastname.txt")'
+description='lowercase(combine(file("firstname.txt"), ".", file("lastname.txt")))'
+uid='lowercase(combine(file("firstname.txt"), ".", file("lastname.txt")))'
+userPassword='"{SSHA}LCHft481Z/qxrJ/4tNzabw27qzANgjAP"'
